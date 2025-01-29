@@ -55,21 +55,24 @@ class TopicModeler(object):
             with open(path, encoding='utf-8', errors='ignore') as f:
                 yield f.read()
 
+    def doc_to_sentences(self, doc: str) -> list[str]:
+        # this splits well on periods but keeps new lines as same sentence
+        sentences_rough = sent_tokenize(doc)
+        # below I split on \n but don't return empty strings
+        return [
+            sentence
+            for sentence_part in sentences_rough
+            for sentence in sentence_part.split('\n')
+            if sentence != ''
+        ]
+
     def yield_doc_sentences(self) -> iter:
         """
         yields list[str] representing the sentences in each doc
         excluding sentences that are blank when stripped
         """
         for doc in self.yield_doc_text():
-            # this splits well on periods but keeps new lines as same sentence
-            sentences_rough = sent_tokenize(doc)
-            # below I split on \n but don't return empty strings
-            yield [
-                sentence
-                for sentence_part in sentences_rough
-                for sentence in sentence_part.split('\n')
-                if sentence != ''
-            ]
+            yield self.doc_to_sentences(doc)
 
     def sentence_to_words(self, sentence: str) -> list:
         """
@@ -119,7 +122,7 @@ class TopicModeler(object):
         self.build_bigrams()
         self.build_trigrams()
 
-    def clean_sentence(self, sentence: str) -> list:
+    def clean_sentence(self, sentence: str) -> list[str]:
         """return list of stemmed, non-stop words, with ngram models applied"""
         ngram_sentence = self.trigram_mod[
             self.bigram_mod[
@@ -132,6 +135,13 @@ class TopicModeler(object):
             if word not in self.stop_words
         ]
 
+    def clean_doc(self, doc: str) -> list[str]:
+        return [
+            word
+            for sentence in self.doc_to_sentences(doc)
+            for word in self.clean_sentence(sentence)
+        ]
+
     def yield_clean_docs(self) -> iter:
         """
         yields for each doc a list of stemmed, non-stop words with ngrams applied
@@ -141,12 +151,8 @@ class TopicModeler(object):
         print([num for sub_list in list_of_lists for num in sub_list])
         > [1, 2, 3, 9, 8, 7]
         """
-        for doc_sentences in self.yield_doc_sentences():
-            yield [
-                word
-                for sentence in doc_sentences
-                for word in self.clean_sentence(sentence)
-            ]
+        for doc in self.yield_doc_text():
+            yield self.clean_doc(doc)
 
     def build_dict_and_corpus(self):
         self.id2word = Dictionary(self.yield_clean_docs())
@@ -254,11 +260,12 @@ def tests():
     for top in model_lsi.print_topics():
         print(top)
 
-    index = similarities.MatrixSimilarity(model_lsi[tm.yield_corpus()])
-    print(index)
+    # index = similarities.MatrixSimilarity(model_lsi[tm.yield_corpus()])
+    # print(index)
 
-    # with open("/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/English-Muffins.md", 'r') as f:
-    #     doc = f.read()
+    with open("/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/English-Muffins.md", 'r') as f:
+        doc = f.read()
+    print(tm.clean_doc(doc))
 
 
 if __name__ == '__main__':
