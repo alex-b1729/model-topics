@@ -1,4 +1,10 @@
+import os
+
+import gensim.corpora
+from gensim import similarities
+from gensim.corpora import Dictionary
 from gensim.utils import simple_preprocess
+from gensim.models import TfidfModel, LsiModel
 from gensim.models.phrases import Phrases, ENGLISH_CONNECTOR_WORDS
 
 from nltk.corpus import stopwords
@@ -24,8 +30,9 @@ class TopicModeler(object):
     1.
     """
     def __init__(self):
-        self.doc_paths = []
+        self.doc_paths: iter = None
 
+        # todo: extend stopwords for eg tbls, cup, oz, etc
         self.stop_words = set(stopwords.words('english'))
         # would prefer to use a lemmatizer
         # todo: work to pos-tag sentences so can lemmatize
@@ -33,6 +40,14 @@ class TopicModeler(object):
 
         self.bigram_mod = None
         self.trigram_mod = None
+
+        # the dictionary
+        self.id2word: gensim.corpora.Dictionary = None
+        # the word frequency matrix with docs on rows, words on columns
+        self.corpus: iter = None
+
+        # models
+        self.tfidf: gensim.models.TfidfModel = None
 
     def yield_doc_text(self) -> iter:
         """yields the contents of each file in self.doc_paths"""
@@ -123,13 +138,7 @@ class TopicModeler(object):
 
         note that
         list_of_lists = [[1,2,3], [9,8,7]]
-        print(
-            [
-                num
-                for sub_list in list_of_lists
-                for num in sub_list
-            ]
-        )
+        print([num for sub_list in list_of_lists for num in sub_list])
         > [1, 2, 3, 9, 8, 7]
         """
         for doc_sentences in self.yield_doc_sentences():
@@ -139,16 +148,54 @@ class TopicModeler(object):
                 for word in self.clean_sentence(sentence)
             ]
 
+    def build_dict_and_corpus(self):
+        self.id2word = Dictionary(self.yield_clean_docs())
+        # in one case changing no_above from 0.9 to 0.6 filtered only about 5 words
+        # no_below seems to have a greater effect 3->5 resulted in 3411->2648
+        self.id2word.filter_extremes(no_below=5, no_above=0.4)
+        # self.id2word.filter_extremes(no_below=4, no_above=0.9)  # testing
+
+    # similarities.MatrixSimilarity requires len(corpus) to work
+    # which is why maybe better to create a corpus class
+    def yield_corpus(self) -> iter:
+        for doc in self.yield_clean_docs():
+            yield self.id2word.doc2bow(doc)
+
+    def build_tfidf(self):
+        self.tfidf = TfidfModel(self.yield_corpus())
+
+    def return_lsi_model(self, num_topics):
+        return LsiModel(
+            corpus=self.tfidf[self.yield_corpus()],
+            id2word=self.id2word,
+            num_topics=num_topics,
+        )
+
 
 def tests():
+    # small sample
     test_paths = [
         "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/20-Minute-Beef-Stroganoff.md",
         "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Arambasici-(Croatian-Sour-Cabbage-Rolls).md",
         "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Backyard-Barbecue-Ribs.md",
         "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Banana-Bread-I.md",
+        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Basic-Omelet.md",
+        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Beef-Burgers-with-Chipotle-Mayo.md",
+        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Blueberry-Pancakes.md",
+        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Cabbage-Rolls-in-Tomato-Sauce-(Holubtsi).md",
+        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Calzone.md",
+        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Chicken-Tikka-Masala.md",
+        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Corn-Bread-Fish.md",
         "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Meatloaf-III.md",
         "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Cantonese-Roast-Duck.md",
     ]
+    # all paths
+    # test_paths = []
+    # with os.scandir('/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/') as it:
+    #     for entry in it:
+    #         if entry.name.endswith('.md') and entry.is_file() and not entry.name.startswith('.'):
+    #             test_paths.append(str(entry.path))
+
     tm = TopicModeler()
     tm.doc_paths = test_paths
 
@@ -189,6 +236,29 @@ def tests():
     # tm.build_ngrams()
     # for doc in tm.yield_clean_docs():
     #     print(doc, end='\n\n')
+
+    # build_dictionary
+    tm.build_ngrams()
+    tm.build_dict_and_corpus()
+    print(f'len(dictionary) = {len(tm.id2word)}')
+    print(f'10 most common dict words: {tm.id2word.most_common(10)}')
+    # for doc in tm.yield_clean_docs():
+    #     print(tm.id2word.doc2bow(doc))
+
+    # tfidf
+    tm.build_tfidf()
+    # for doc in tm.yield_corpus():
+    #     print(tm.tfidf[doc])
+
+    model_lsi = tm.return_lsi_model(num_topics=4)
+    for top in model_lsi.print_topics():
+        print(top)
+
+    index = similarities.MatrixSimilarity(model_lsi[tm.yield_corpus()])
+    print(index)
+
+    # with open("/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/English-Muffins.md", 'r') as f:
+    #     doc = f.read()
 
 
 if __name__ == '__main__':
