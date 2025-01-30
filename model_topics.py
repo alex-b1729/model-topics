@@ -1,4 +1,5 @@
 import os
+from collections.abc import Iterator
 
 import gensim.corpora
 from gensim import similarities
@@ -49,7 +50,7 @@ class TopicModeler(object):
         # models
         self.tfidf: gensim.models.TfidfModel = None
 
-    def yield_doc_text(self) -> iter:
+    def yield_doc_text(self) -> Iterator[str]:
         """yields the contents of each file in self.doc_paths"""
         for path in self.doc_paths:
             with open(path, encoding='utf-8', errors='ignore') as f:
@@ -66,7 +67,7 @@ class TopicModeler(object):
             if sentence != ''
         ]
 
-    def yield_doc_sentences(self) -> iter:
+    def yield_doc_sentences(self) -> Iterator[list[str]]:
         """
         yields list[str] representing the sentences in each doc
         excluding sentences that are blank when stripped
@@ -74,13 +75,13 @@ class TopicModeler(object):
         for doc in self.yield_doc_text():
             yield self.doc_to_sentences(doc)
 
-    def sentence_to_words(self, sentence: str) -> list:
+    def sentence_to_words(self, sentence: str) -> list[str]:
         """
         returns list of simple_preprocess words
         """
         return simple_preprocess(sentence, deacc=True)
 
-    def yield_all_sentences(self) -> iter:
+    def yield_all_sentences(self) -> Iterator[list[str]]:
         """iter all sentences with simple_preprocess applied"""
         for doc in self.yield_doc_sentences():
             for sentence in doc:
@@ -122,7 +123,7 @@ class TopicModeler(object):
         self.build_bigrams()
         self.build_trigrams()
 
-    def clean_sentence(self, sentence: str) -> list[str]:
+    def sentence_to_clean_words(self, sentence: str) -> list[str]:
         """return list of stemmed, non-stop words, with ngram models applied"""
         ngram_sentence = self.trigram_mod[
             self.bigram_mod[
@@ -135,42 +136,39 @@ class TopicModeler(object):
             if word not in self.stop_words
         ]
 
-    def clean_doc(self, doc: str) -> list[str]:
+    def doc_to_clean_words(self, doc: str) -> list[str]:
+        """
+        given string document,
+        returns list of stemmed, non-stop words with ngrams applied
+        """
         return [
             word
             for sentence in self.doc_to_sentences(doc)
-            for word in self.clean_sentence(sentence)
+            for word in self.sentence_to_clean_words(sentence)
         ]
 
-    def yield_clean_docs(self) -> iter:
-        """
-        yields for each doc a list of stemmed, non-stop words with ngrams applied
-
-        note that
-        list_of_lists = [[1,2,3], [9,8,7]]
-        print([num for sub_list in list_of_lists for num in sub_list])
-        > [1, 2, 3, 9, 8, 7]
-        """
+    def yield_clean_docs(self) -> Iterator[list[str]]:
+        """yields lists of clean words for each doc"""
         for doc in self.yield_doc_text():
-            yield self.clean_doc(doc)
+            yield self.doc_to_clean_words(doc)
 
     def build_dict_and_corpus(self):
         self.id2word = Dictionary(self.yield_clean_docs())
         # in one case changing no_above from 0.9 to 0.6 filtered only about 5 words
         # no_below seems to have a greater effect 3->5 resulted in 3411->2648
-        self.id2word.filter_extremes(no_below=5, no_above=0.4)
+        self.id2word.filter_extremes(no_below=8, no_above=0.6)
         # self.id2word.filter_extremes(no_below=4, no_above=0.9)  # testing
 
     # similarities.MatrixSimilarity requires len(corpus) to work
     # which is why maybe better to create a corpus class
-    def yield_corpus(self) -> iter:
+    def yield_corpus(self) -> Iterator[list[tuple[float]]]:
         for doc in self.yield_clean_docs():
             yield self.id2word.doc2bow(doc)
 
     def build_tfidf(self):
         self.tfidf = TfidfModel(self.yield_corpus())
 
-    def return_lsi_model(self, num_topics):
+    def return_lsi_model(self, num_topics: int) -> gensim.models.LsiModel:
         return LsiModel(
             corpus=self.tfidf[self.yield_corpus()],
             id2word=self.id2word,
@@ -256,17 +254,32 @@ def tests():
     # for doc in tm.yield_corpus():
     #     print(tm.tfidf[doc])
 
-    model_lsi = tm.return_lsi_model(num_topics=4)
+    """
+    # compare with lsi
+    model_lsi = tm.return_lsi_model(num_topics=40)
     for top in model_lsi.print_topics():
         print(top)
-
-    # index = similarities.MatrixSimilarity(model_lsi[tm.yield_corpus()])
-    # print(index)
-
-    with open("/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/English-Muffins.md", 'r') as f:
+    index = similarities.MatrixSimilarity(model_lsi[[bow for bow in tm.yield_corpus()]])
+    with open("/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Honey-Mustard-Salmon.md", 'r') as f:
         doc = f.read()
-    print(tm.clean_doc(doc))
+    vec_bow = tm.id2word.doc2bow(tm.clean_doc(doc))
+    vec_lsi = model_lsi[vec_bow]
+    # similar recipes
+    sims = index[vec_lsi]
+    sims = sorted(enumerate(sims), key=lambda item: -item[1])
+    for doc_pos, doc_score in sims[:10]:
+        print(doc_score, test_paths[doc_pos].split('/')[-1])
+    for doc_pos, doc_score in sims[-10:]:
+        print(doc_score, test_paths[doc_pos].split('/')[-1])
+    """
 
+    # model_lda = tm.return_lda_model(num_topics=20)
+    # for top in model_lda.print_topics(10):
+    #     print(top)
+    # pyLDAvis.enable_notebook()
+    # vis = pyLDAvis.gensim.prepare(model_lda, corpus=list(tm.yield_corpus()), dictionary=tm.id2word)
+    # pyLDAvis.save_html(vis, 'test_vis_01.html')
+    
 
 if __name__ == '__main__':
     tests()
