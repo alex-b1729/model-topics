@@ -5,8 +5,8 @@ import gensim.corpora
 from gensim import similarities
 from gensim.corpora import Dictionary
 from gensim.utils import simple_preprocess
-from gensim.models import TfidfModel, LsiModel
 from gensim.models.phrases import Phrases, ENGLISH_CONNECTOR_WORDS
+from gensim.models import TfidfModel, LsiModel, LdaModel, CoherenceModel
 
 from nltk.corpus import stopwords
 from nltk.tokenize import sent_tokenize
@@ -25,9 +25,8 @@ from nltk.stem.porter import PorterStemmer
 
 class DocumentPreProcessor(object):
     """
-    Cleans documents and provides memory efficient methods
+    Provides memory efficient methods for cleaning documents
     doc_paths: iter of paths to docs
-    builds dictionary given docs but doesn't filter extremes
     """
     def __init__(self, doc_paths: iter = None):
         self.doc_paths: iter = doc_paths
@@ -155,10 +154,7 @@ class DocumentPreProcessor(object):
 
     def build_dictionary(self):
         self.id2word = Dictionary(self.yield_clean_docs())
-        # in one case changing no_above from 0.9 to 0.6 filtered only about 5 words
-        # no_below seems to have a greater effect 3->5 resulted in 3411->2648
         # self.id2word.filter_extremes(no_below=8, no_above=0.6)
-        # self.id2word.filter_extremes(no_below=4, no_above=0.9)  # testing
 
     def save_dict_and_ngrams(self, dir_path: str) -> None:
         """
@@ -192,151 +188,143 @@ class DocumentPreProcessor(object):
 
 class MemoryFriendlyCorpus(object):
     """
-    yields clean documents from a DocumentPreProcessor object
-    The len is necessary if you want to build a similarity matrix in memory
-    using gensim.similarities.MatrixSimilarity
+    Yields clean documents from a DocumentPreProcessor object.
+    The __len__ method is necessary to build a similarity matrix in memory
+    using gensim.similarities.MatrixSimilarity.
     """
     def __init__(self, dpp: DocumentPreProcessor):
         self.dpp: DocumentPreProcessor = dpp
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[list[tuple[float]]]:
         for doc in self.dpp.yield_clean_docs():
             yield self.dpp.id2word.doc2bow(doc)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.dpp.doc_paths)
 
 
-class Asdf(object):
-    # similarities.MatrixSimilarity requires len(corpus) to work
-    # which is why maybe better to create a corpus class
-    def yield_corpus(self) -> Iterator[list[tuple[float]]]:
-        for doc in self.yield_clean_docs():
-            yield self.id2word.doc2bow(doc)
-
-    def build_tfidf(self):
-        self.tfidf = TfidfModel(self.yield_corpus())
-
-    def return_lsi_model(self, num_topics: int) -> gensim.models.LsiModel:
-        return LsiModel(
-            corpus=self.tfidf[self.yield_corpus()],
-            id2word=self.id2word,
-            num_topics=num_topics,
-        )
-
-
-def tests():
-    # small sample
-    doc_paths = [
-        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/20-Minute-Beef-Stroganoff.md",
-        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Arambasici-(Croatian-Sour-Cabbage-Rolls).md",
-        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Backyard-Barbecue-Ribs.md",
-        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Banana-Bread-I.md",
-        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Basic-Omelet.md",
-        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Beef-Burgers-with-Chipotle-Mayo.md",
-        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Blueberry-Pancakes.md",
-        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Cabbage-Rolls-in-Tomato-Sauce-(Holubtsi).md",
-        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Calzone.md",
-        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Chicken-Tikka-Masala.md",
-        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Corn-Bread-Fish.md",
-        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Meatloaf-III.md",
-        "/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Cantonese-Roast-Duck.md",
-    ]
-    # all paths
-    # doc_paths = []
-    # with os.scandir('/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/') as it:
-    #     for entry in it:
-    #         if entry.name.endswith('.md') and entry.is_file() and not entry.name.startswith('.'):
-    #             doc_paths.append(str(entry.path))
+def main():
+    doc_paths = []
+    dir_path = 'recipes/'
+    with os.scandir(dir_path) as it:
+        for entry in it:
+            if entry.name.endswith('.md') and entry.is_file() and not entry.name.startswith('.'):
+                doc_paths.append(str(entry.path))
 
     dpp = DocumentPreProcessor(doc_paths)
-    extra_stopwords = [
-        'minute', 'hour', 'oz', 'cup', 'ml', 'tsp', 'tbsp'
-    ]
-    dpp.extend_stopwords(extra_stopwords)
 
-    # yield_doc_text
-    # for txt in dpp.yield_doc_text():
-    #     print(txt, end='--------------\n\n')
+    dpp.extend_stopwords([
+        'tsp', 'teaspoon', 'teaspoons',
+        'milliliter', 'ml', 'milliliters',
+        'tbsp', 'tablespoon', 'tablespoons',
+        'cup', 'cups',
+        'pound', 'lb', 'pounds',
+        'oz', 'ounce', 'ounces',
+        'minute', 'minutes',
+        'hour', 'hours',
+        'high', 'medium', 'low',
+    ])
 
-    # yield_doc_sentences
-    # for sentences in dpp.yield_doc_sentences():
-    #     print(sentences, end='--------------\n\n')
-
-    # sentence_to_words
-    # for sentences in dpp.yield_doc_sentences():
-    #     for sentence in sentences:
-    #         print(f'sentence: {sentence}')
-    #         print(f'words: {dpp.sentence_to_words(sentence)}', end='\n---------------------------\n')
-
-    # yield_all_sentences
-    # for sentence in dpp.yield_all_sentences():
-    #     print(sentence)
-
-    # build ngrams
-    # dpp.build_ngrams()
-    # for sentence in dpp.yield_all_sentences():
-    #     for word in dpp.bigram_mod[sentence]:
-    #         if '_' in word:
-    #             print(word)
-
-    # clean_sentence
-    # dpp.build_ngrams()
-    # for sentences in dpp.yield_doc_sentences():
-    #     for sentence in sentences:
-    #         print(f'sentence: {sentence}')
-    #         print(f'cleaned: {dpp.clean_sentence(sentence)}')
-    #         print('---------------------')
-
-    # yield_clean_docs
-    # dpp.build_ngrams()
-    # for doc in dpp.yield_clean_docs():
-    #     print(doc, end='\n\n')
-
-    # build_dictionary
     dpp.build_ngrams()
     dpp.build_dictionary()
-    print(f'len(dictionary) = {len(dpp.id2word)}')
-    print(f'10 most common dict words: {dpp.id2word.most_common(10)}')
-    # for doc in tm.yield_clean_docs():
-    #     print(tm.id2word.doc2bow(doc))
-    # for doc in tm.yield_clean_docs():
-    #     print(doc)
+    print(f'pre-filter len(dictionary) = {len(dpp.id2word)}')
+    dpp.id2word.filter_extremes(no_below=8, no_above=0.5)
+    # dpp.save_dict_and_ngrams('test_models')
 
-    # tfidf
-    # tm.build_tfidf()
-    # for doc in tm.yield_corpus():
-    #     print(tm.tfidf[doc])
+    # dpp.load_dict_and_ngrams('test_models')
+    print(f'final len(dictionary) = {len(dpp.id2word)}')
+    print(f'10 most common dict words: {dpp.id2word.most_common(10)}')
+
+    # specific word frequency
+    wrd = 'duck'
+    wordid = dpp.id2word.token2id[wrd]
+    print(f'{wrd} id: {wordid}')
+    print(f'{wrd} occures in {dpp.id2word.dfs[wordid]} docs')
+    print(f'{wrd} occres {dpp.id2word.cfs[wordid]} times total')
+
+    words_fs_sorted = sorted(dpp.id2word.dfs.items(), key=lambda item: item[1])
+    print('10 words in fewest documents')
+    for w in words_fs_sorted[:20]:
+        print(f'\t{w[1]} x {dpp.id2word[w[0]]}')
+    print('10 words in most documents')
+    for w in words_fs_sorted[-10:]:
+        print(f'\t{w[1]} x {dpp.id2word[w[0]]}')
 
     # compare using lsi
-    # model_lsi = tm.return_lsi_model(num_topics=40)
-    # for top in model_lsi.print_topics():
-    #     print(top)
-    # index = similarities.MatrixSimilarity(model_lsi[[bow for bow in tm.yield_corpus()]])
-    # with open("/Users/abrefeld/ab/Scripts/scrapers/wikirecipes/data/recipes/Honey-Mustard-Salmon.md", 'r') as f:
-    #     doc = f.read()
-    # vec_bow = tm.id2word.doc2bow(tm.doc_to_clean_words(doc))
-    # vec_lsi = model_lsi[vec_bow]
-    # # similar recipes
-    # sims = index[vec_lsi]
-    # sims = sorted(enumerate(sims), key=lambda item: -item[1])
-    # for doc_pos, doc_score in sims[:10]:
-    #     print(doc_score, test_paths[doc_pos].split('/')[-1])
-    # for doc_pos, doc_score in sims[-10:]:
-    #     print(doc_score, test_paths[doc_pos].split('/')[-1])
-
-    # model_lda = tm.return_lda_model(num_topics=20)
-    # for top in model_lda.print_topics(10):
-    #     print(top)
-    # pyLDAvis.enable_notebook()
-    # vis = pyLDAvis.gensim.prepare(model_lda, corpus=list(tm.yield_corpus()), dictionary=tm.id2word)
-    # pyLDAvis.save_html(vis, 'test_vis_01.html')
+    corpus = MemoryFriendlyCorpus(dpp)
+    tfidf_model = TfidfModel(corpus=corpus)
+    tfidf_corpus = tfidf_model[corpus]
 
 
-def main():
-    pass
+    # doc to compare
+    compare_path = "test_doc.md"
+    with open(compare_path, 'r') as f:
+        doc = f.read()
+    vec_bow = dpp.id2word.doc2bow(dpp.doc_to_clean_words(doc))
+
+    # comparison
+    print(f'---------- LSA ------------')
+    model_lsi = LsiModel(
+            corpus=tfidf_corpus,
+            id2word=dpp.id2word,
+            num_topics=15,
+        )
+    print('lsa topics')
+    for top in model_lsi.print_topics():
+        print(top)
+    index = similarities.MatrixSimilarity(model_lsi[list(tfidf_corpus)])
+    vec_lsi = model_lsi[tfidf_model[vec_bow]]
+    print(f'vec lsi: {vec_lsi}')
+    # similar recipes
+    sims = index[vec_lsi]
+    sims = sorted(enumerate(sims), key=lambda item: -item[1])
+    print('10 most similar docs and cosine similarity')
+    for doc_pos, doc_score in sims[:10]:
+        print(doc_score, doc_paths[doc_pos].split('/')[-1])
+    print('10 least similar')
+    for doc_pos, doc_score in sims[-10:]:
+        print(doc_score, doc_paths[doc_pos].split('/')[-1])
+
+    # lda
+    print(f'---------- LDA ------------')
+    model_lda = LdaModel(
+        corpus=tfidf_corpus,
+        num_topics=10,
+        id2word=dpp.id2word,
+        # random_state=100,
+        # update_every=1,
+        # chunksize=100,
+        passes=5,
+        alpha='auto',
+        per_word_topics=True,
+    )
+    print('lda topics')
+    for top in model_lda.print_topics():
+        print(top)
+
+    # find coherence values for different numbers of topics
+    print('finding topic coherence scores')
+    coherence_vals = []
+    print('topic: ', end='')
+    rng = list(range(5, 25, 1))
+    for num_topics in rng:
+        print(f'{num_topics}, ', end='')
+        model_lda = LdaModel(
+            corpus=tfidf_corpus,
+            num_topics=num_topics,
+            id2word=dpp.id2word,
+            random_state=100,
+            update_every=1,
+            chunksize=100,
+            passes=2,
+            alpha='auto',
+        )
+        coherencemod = CoherenceModel(model=model_lda, texts=dpp.yield_clean_docs(), coherence='c_v')
+        coherence_vals.append(coherencemod.get_coherence())
+    print('\ncoherence vals: ')
+    for i, co in enumerate(coherence_vals):
+        print(f'{rng[i]}: {co}')
 
 
 if __name__ == '__main__':
-    tests()
-    # main()
+    main()
